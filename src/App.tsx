@@ -490,9 +490,9 @@ function Hero(props: { content: PortfolioContent }) {
         >
           <Mail size={16} /> Email
         </a>
-        <div className="p-6 m-4 rounded-xl bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900">
+        {/* <div className="p-6 m-4 rounded-xl bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900">
   Tailwind is working
-</div>
+</div> */}
       </motion.div>
     </Container>
     
