@@ -35,7 +35,7 @@
 // export default App
 // FILE: src/App.tsx
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion, type Transition, type HTMLMotionProps } from "framer-motion";
 import {
   ArrowRight,
@@ -168,6 +168,91 @@ const defaultContent: PortfolioContent = {
   }
 };
 
+const emptyProject: Project = { title: "", description: "", tags: [], href: "", repo: "" };
+const emptyExperience: Experience = { role: "", company: "", period: "", bullets: [] };
+
+function cloneProjectsList(list: Project[]): Project[] {
+  return list.map((project) => ({
+    title: project.title,
+    description: project.description,
+    tags: [...project.tags],
+    href: project.href ?? "",
+    repo: project.repo ?? ""
+  }));
+}
+
+function cloneExperienceList(list: Experience[]): Experience[] {
+  return list.map((item) => ({
+    role: item.role,
+    company: item.company,
+    period: item.period,
+    bullets: [...item.bullets]
+  }));
+}
+
+function cloneSkillsMap(skills: Record<string, string[]>): Record<string, string[]> {
+  const next: Record<string, string[]> = {};
+  for (const [category, items] of Object.entries(skills)) {
+    next[category] = [...items];
+  }
+  return next;
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+function sanitizeProjects(input?: unknown): Project[] {
+  if (!Array.isArray(input)) {
+    return cloneProjectsList(defaultContent.projects);
+  }
+  return input.map((item, index) => {
+    const raw = (item && typeof item === "object" ? item : {}) as Partial<Project>;
+    const fallback = defaultContent.projects[index] ?? emptyProject;
+    const tags = Array.isArray(raw.tags)
+      ? raw.tags.filter(isString).map((tag) => tag.trim()).filter(Boolean)
+      : [...fallback.tags];
+    return {
+      title: isString(raw.title) ? raw.title : fallback.title,
+      description: isString(raw.description) ? raw.description : fallback.description,
+      tags,
+      href: isString(raw.href) ? raw.href : fallback.href ?? "",
+      repo: isString(raw.repo) ? raw.repo : fallback.repo ?? ""
+    };
+  });
+}
+
+function sanitizeExperience(input?: unknown): Experience[] {
+  if (!Array.isArray(input)) {
+    return cloneExperienceList(defaultContent.experience);
+  }
+  return input.map((item, index) => {
+    const raw = (item && typeof item === "object" ? item : {}) as Partial<Experience>;
+    const fallback = defaultContent.experience[index] ?? emptyExperience;
+    return {
+      role: isString(raw.role) ? raw.role : fallback.role,
+      company: isString(raw.company) ? raw.company : fallback.company,
+      period: isString(raw.period) ? raw.period : fallback.period,
+      bullets: Array.isArray(raw.bullets)
+        ? raw.bullets.filter(isString).map((bullet) => bullet.trim()).filter(Boolean)
+        : [...fallback.bullets]
+    };
+  });
+}
+
+function sanitizeSkills(input?: unknown): Record<string, string[]> {
+  if (!input || typeof input !== "object") {
+    return cloneSkillsMap(defaultContent.skills);
+  }
+  const next: Record<string, string[]> = {};
+  for (const [category, value] of Object.entries(input as Record<string, unknown>)) {
+    if (!Array.isArray(value)) continue;
+    const cleaned = value.filter(isString).map((item) => item.trim()).filter(Boolean);
+    next[category] = cleaned;
+  }
+  return Object.keys(next).length ? next : cloneSkillsMap(defaultContent.skills);
+}
+
 const CONTENT_STORAGE_KEY = "portfolio-content-v1";
 const DASHBOARD_PIN_STORAGE_KEY = "portfolio-dashboard-pin";
 
@@ -181,9 +266,9 @@ function mergeContent(partial?: Partial<PortfolioContent>): PortfolioContent {
     hero: { ...defaultContent.hero, ...(partial.hero ?? {}) },
     branding: { ...defaultContent.branding, ...(partial.branding ?? {}) },
     links: { ...defaultContent.links, ...(partial.links ?? {}) },
-    projects: Array.isArray(partial.projects) ? partial.projects : defaultContent.projects,
-    experience: Array.isArray(partial.experience) ? partial.experience : defaultContent.experience,
-    skills: partial.skills ?? defaultContent.skills,
+    projects: sanitizeProjects(partial.projects),
+    experience: sanitizeExperience(partial.experience),
+    skills: sanitizeSkills(partial.skills),
     footer: { ...defaultContent.footer, ...(partial.footer ?? {}) }
   };
   return cloneContent(merged);
@@ -252,59 +337,126 @@ function usePortfolioContent() {
 }
 
 function encodePin(pin: string): string {
-  if (typeof window === "undefined") return pin;
-  const encoder = new TextEncoder();
-  const bytes = encoder.encode(pin);
-  let binary = "";
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte);
-  });
-  return window.btoa(binary);
+  try {
+    const encoder = typeof TextEncoder !== "undefined" ? new TextEncoder() : null;
+    if (!encoder) throw new Error("TextEncoder not available");
+    const bytes = encoder.encode(pin);
+    if (typeof globalThis.btoa === "function") {
+      let binary = "";
+      bytes.forEach((byte) => {
+        binary += String.fromCharCode(byte);
+      });
+      return globalThis.btoa(binary);
+    }
+    const maybeBuffer = (globalThis as { Buffer?: { from(value: string | Uint8Array, encoding?: string): { toString(encoding: string): string } } }).Buffer;
+    if (maybeBuffer) {
+      return maybeBuffer.from(bytes).toString("base64");
+    }
+    return Array.from(bytes)
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  } catch {
+    const maybeBuffer = (globalThis as { Buffer?: { from(value: string | Uint8Array, encoding?: string): { toString(encoding: string): string } } }).Buffer;
+    if (maybeBuffer) {
+      return maybeBuffer.from(pin, "utf-8").toString("base64");
+    }
+    return pin;
+  }
 }
 
-function useDashboardPin() {
+type DashboardPinState = {
+  hasPin: boolean;
+  verifyPin: (pin: string) => boolean;
+  createPin: (pin: string) => boolean;
+  updatePin: (current: string, next: string) => boolean;
+  clearPin: () => boolean;
+  pinHash: string | null;
+  canModifyPin: boolean;
+};
+
+function useDashboardPin(): DashboardPinState {
+  const envPin = (import.meta.env.VITE_DASHBOARD_PIN as string | undefined)?.trim();
+  const envPinHashExplicit = (import.meta.env.VITE_DASHBOARD_PIN_HASH as string | undefined)?.trim();
+  const envPinHash = envPinHashExplicit ? envPinHashExplicit : envPin ? encodePin(envPin) : null;
+
   const [encodedPin, setEncodedPin] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    return window.localStorage.getItem(DASHBOARD_PIN_STORAGE_KEY);
+    if (typeof window === "undefined") {
+      return envPinHash ?? null;
+    }
+    const stored = window.localStorage.getItem(DASHBOARD_PIN_STORAGE_KEY);
+    if (stored) return stored;
+    if (envPinHash) {
+      window.localStorage.setItem(DASHBOARD_PIN_STORAGE_KEY, envPinHash);
+      return envPinHash;
+    }
+    return null;
   });
 
-  const persist = (pin: string | null) => {
-    if (typeof window === "undefined") return;
-    if (pin === null) {
-      window.localStorage.removeItem(DASHBOARD_PIN_STORAGE_KEY);
-    } else {
-      window.localStorage.setItem(DASHBOARD_PIN_STORAGE_KEY, pin);
+  useEffect(() => {
+    if (envPinHash && encodedPin !== envPinHash) {
+      setEncodedPin(envPinHash);
+      return;
     }
-  };
+    if (typeof window === "undefined") return;
+    if (encodedPin) {
+      window.localStorage.setItem(DASHBOARD_PIN_STORAGE_KEY, encodedPin);
+    } else {
+      window.localStorage.removeItem(DASHBOARD_PIN_STORAGE_KEY);
+    }
+  }, [encodedPin, envPinHash]);
 
-  const setPin = (pin: string) => {
-    const hashed = encodePin(pin);
-    persist(hashed);
-    setEncodedPin(hashed);
-  };
+  const canModifyPin = !envPinHash;
 
-  const verifyPin = (pin: string) => {
-    if (!encodedPin) return false;
-    return encodePin(pin) === encodedPin;
-  };
+  const verifyPin = useCallback(
+    (pin: string) => {
+      if (!encodedPin) return false;
+      return encodePin(pin) === encodedPin;
+    },
+    [encodedPin]
+  );
 
-  const clearPin = () => {
-    persist(null);
+  const setEncodedFromPin = useCallback(
+    (pin: string) => {
+      const hashed = encodePin(pin);
+      setEncodedPin(hashed);
+      return hashed;
+    },
+    []
+  );
+
+  const createPin = useCallback(
+    (pin: string) => {
+      if (!canModifyPin) return false;
+      setEncodedFromPin(pin);
+      return true;
+    },
+    [canModifyPin, setEncodedFromPin]
+  );
+
+  const updatePin = useCallback(
+    (current: string, next: string) => {
+      if (!canModifyPin) return false;
+      if (encodedPin && !verifyPin(current)) return false;
+      setEncodedFromPin(next);
+      return true;
+    },
+    [canModifyPin, encodedPin, setEncodedFromPin, verifyPin]
+  );
+
+  const clearPin = useCallback(() => {
+    if (!canModifyPin) return false;
     setEncodedPin(null);
-  };
-
-  const updatePin = (current: string, next: string) => {
-    if (encodedPin && !verifyPin(current)) return false;
-    setPin(next);
     return true;
-  };
+  }, [canModifyPin]);
 
   return {
     hasPin: encodedPin !== null,
     verifyPin,
-    setPin,
+    createPin,
     updatePin,
-    clearPin
+    clearPin,
+    pinHash: encodedPin,
+    canModifyPin
   };
 }
 
@@ -726,6 +878,8 @@ type DashboardProps = {
   onClearPin: (currentPin: string) => boolean;
   onLock: () => void;
   hasPin: boolean;
+  pinHash: string | null;
+  canModifyPin: boolean;
 };
 
 function Dashboard({
@@ -736,7 +890,9 @@ function Dashboard({
   onUpdatePin,
   onClearPin,
   onLock,
-  hasPin
+  hasPin,
+  pinHash,
+  canModifyPin
 }: DashboardProps) {
   const inputClass =
     "w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-zinc-400 focus:ring-2 focus:ring-zinc-200 dark:border-zinc-700 dark:bg-zinc-900 dark:focus:border-zinc-600";
@@ -748,6 +904,16 @@ function Dashboard({
   const [removePinValue, setRemovePinValue] = useState("");
   const [securityError, setSecurityError] = useState<string | null>(null);
   const [securityMessage, setSecurityMessage] = useState<string | null>(null);
+  const securityDescription = canModifyPin
+    ? "Protect your dashboard with a PIN so only you can edit this portfolio on this device. Copy the hash below into your environment to reuse it elsewhere."
+    : "PIN management is locked to your build configuration (VITE_DASHBOARD_PIN or VITE_DASHBOARD_PIN_HASH). Update your .env to change it.";
+
+  useEffect(() => {
+    if (!canModifyPin) {
+      setSecurityError(null);
+      setSecurityMessage(null);
+    }
+  }, [canModifyPin]);
 
   const handleHeroChange = (key: keyof HeroContent, value: string) => {
     onChange((prev) => ({
@@ -922,6 +1088,11 @@ function Dashboard({
 
   const handlePinSubmit = (event: React.FormEvent) => {
     event.preventDefault();
+    if (!canModifyPin) {
+      setSecurityError("PIN is managed via configuration. Update VITE_DASHBOARD_PIN or VITE_DASHBOARD_PIN_HASH to change it.");
+      setSecurityMessage(null);
+      return;
+    }
     setSecurityError(null);
     setSecurityMessage(null);
     const trimmedNew = newPin.trim();
@@ -944,7 +1115,11 @@ function Dashboard({
       return;
     }
 
-    setSecurityMessage(hasPin ? "PIN updated successfully." : "PIN set successfully.");
+    setSecurityMessage(
+      hasPin
+        ? "PIN updated. Copy the hash below if you need to reuse it elsewhere."
+        : "PIN saved. Copy the hash below to reuse this PIN across browsers."
+    );
     setCurrentPin("");
     setNewPin("");
     setConfirmPin("");
@@ -954,6 +1129,10 @@ function Dashboard({
   const handleRemovePin = () => {
     setSecurityError(null);
     setSecurityMessage(null);
+    if (!canModifyPin) {
+      setSecurityError("PIN removal is disabled because it is configured via environment variables.");
+      return;
+    }
     if (!hasPin) {
       setSecurityError("No PIN is currently set.");
       return;
@@ -1302,9 +1481,7 @@ function Dashboard({
               Lock dashboard
             </GhostButton>
           </div>
-          <p className="text-sm text-zinc-500">
-            Protect your dashboard with a PIN so only you can edit this portfolio on this device.
-          </p>
+          <p className="text-sm text-zinc-500">{securityDescription}</p>
           {securityError && <p className="text-sm text-red-500">{securityError}</p>}
           {securityMessage && <p className="text-sm text-emerald-500">{securityMessage}</p>}
           <form onSubmit={handlePinSubmit} className="grid gap-4 md:grid-cols-2">
@@ -1317,6 +1494,7 @@ function Dashboard({
                   value={currentPin}
                   onChange={(e) => setCurrentPin(e.target.value)}
                   autoComplete="current-password"
+                  disabled={!canModifyPin}
                 />
               </div>
             )}
@@ -1328,6 +1506,7 @@ function Dashboard({
                 value={newPin}
                 onChange={(e) => setNewPin(e.target.value)}
                 autoComplete="new-password"
+                disabled={!canModifyPin}
               />
             </div>
             <div>
@@ -1338,14 +1517,30 @@ function Dashboard({
                 value={confirmPin}
                 onChange={(e) => setConfirmPin(e.target.value)}
                 autoComplete="new-password"
+                disabled={!canModifyPin}
               />
             </div>
             <div className="md:col-span-2">
-              <Button type="submit">{hasPin ? "Update PIN" : "Set PIN"}</Button>
+              <Button type="submit" disabled={!canModifyPin}>
+                {hasPin ? "Update PIN" : "Set PIN"}
+              </Button>
             </div>
           </form>
 
-          {hasPin && (
+          {pinHash && (
+            <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-300">
+              <p className="mb-2 font-semibold uppercase tracking-wide text-[0.65rem] text-zinc-400">
+                Current PIN hash
+              </p>
+              <code className="block break-all font-mono text-[0.75rem]">{pinHash}</code>
+              <p className="mt-2 text-[0.65rem] text-zinc-400">
+                Add this line to your <code>.env.local</code>:{" "}
+                <code>VITE_DASHBOARD_PIN_HASH="{pinHash}"</code> to reuse the same PIN across browsers.
+              </p>
+            </div>
+          )}
+
+          {hasPin && canModifyPin && (
             <div className="flex flex-col gap-3 rounded-2xl border border-zinc-200 p-4 dark:border-zinc-800 md:flex-row md:items-center md:justify-between">
               <div>
                 <p className="text-sm font-semibold">Remove PIN</p>
@@ -1361,8 +1556,9 @@ function Dashboard({
                   onChange={(e) => setRemovePinValue(e.target.value)}
                   placeholder="Current PIN"
                   autoComplete="off"
+                  disabled={!canModifyPin}
                 />
-                <GhostButton type="button" onClick={handleRemovePin}>
+                <GhostButton type="button" onClick={handleRemovePin} disabled={!canModifyPin}>
                   Remove PIN
                 </GhostButton>
               </div>
@@ -1437,6 +1633,13 @@ function DashboardAuthScreen({ hasPin, onVerify, onCreate, onCancel }: Dashboard
               ? "Enter the access PIN to manage your portfolio content."
               : "Set a dashboard PIN so only you can edit this portfolio on this device."}
           </p>
+          {mode === "create" && (
+            <p className="mt-2 text-xs text-zinc-500">
+              After saving, copy the PIN hash from the dashboard security section into{" "}
+              <code className="text-xs">.env.local</code> as{" "}
+              <code className="text-xs">VITE_DASHBOARD_PIN_HASH</code> to reuse it on other browsers.
+            </p>
+          )}
         </div>
         {error && <p className="text-sm text-red-500">{error}</p>}
         <form className="space-y-4" onSubmit={handleSubmit}>
@@ -1494,11 +1697,9 @@ function Footer(props: { owner: string }) {
 
 export default function App() {
   const { content, setContent, reset } = usePortfolioContent();
-  const { hasPin, verifyPin, setPin, updatePin, clearPin } = useDashboardPin();
-  const [isDashboard, setIsDashboard] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return window.location.hash === "#dashboard";
-  });
+  const { hasPin, verifyPin, createPin, updatePin, clearPin, pinHash, canModifyPin } = useDashboardPin();
+  const getPath = () => (typeof window !== "undefined" ? window.location.pathname : "/");
+  const [route, setRoute] = useState<string>(() => getPath());
   const [isDashboardAuthed, setIsDashboardAuthed] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     return window.sessionStorage.getItem("dashboard-authed") === "true";
@@ -1506,11 +1707,11 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const handleHashChange = () => {
-      setIsDashboard(window.location.hash === "#dashboard");
+    const handlePopState = () => {
+      setRoute(getPath());
     };
-    window.addEventListener("hashchange", handleHashChange);
-    return () => window.removeEventListener("hashchange", handleHashChange);
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
   useEffect(() => {
@@ -1522,18 +1723,19 @@ export default function App() {
     }
   }, [isDashboardAuthed]);
 
+  const navigate = (path: string) => {
+    if (typeof window === "undefined") return;
+    if (window.location.pathname === path) return;
+    window.history.pushState({}, "", path);
+    setRoute(path);
+  };
+
   const openDashboard = () => {
-    if (typeof window !== "undefined") {
-      window.location.hash = "#dashboard";
-    }
-    setIsDashboard(true);
+    navigate("/dashboard");
   };
 
   const closeDashboard = () => {
-    if (typeof window !== "undefined" && window.location.hash === "#dashboard") {
-      window.location.hash = "";
-    }
-    setIsDashboard(false);
+    navigate("/");
   };
 
   const handleVerifyPin = (pinValue: string) => {
@@ -1546,9 +1748,11 @@ export default function App() {
   };
 
   const handleCreatePin = (pinValue: string) => {
-    setPin(pinValue);
-    setIsDashboardAuthed(true);
-    return true;
+    const success = createPin(pinValue);
+    if (success) {
+      setIsDashboardAuthed(true);
+    }
+    return success;
   };
 
   const handleUpdatePin = (currentPin: string, nextPin: string) => {
@@ -1563,8 +1767,7 @@ export default function App() {
     if (hasPin && !verifyPin(currentPin)) {
       return false;
     }
-    clearPin();
-    return true;
+    return clearPin();
   };
 
   const handleLock = () => {
@@ -1572,7 +1775,9 @@ export default function App() {
     closeDashboard();
   };
 
-  if (isDashboard) {
+  const isDashboardRoute = route === "/dashboard";
+
+  if (isDashboardRoute) {
     if (!isDashboardAuthed) {
       return (
         <DashboardAuthScreen
@@ -1594,6 +1799,8 @@ export default function App() {
         onClearPin={handleClearPin}
         onLock={handleLock}
         hasPin={hasPin}
+        pinHash={pinHash}
+        canModifyPin={canModifyPin}
       />
     );
   }
@@ -1612,13 +1819,3 @@ export default function App() {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
