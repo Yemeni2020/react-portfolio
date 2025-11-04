@@ -46,8 +46,7 @@ import {
   SunMedium,
   ExternalLink,
   Link as LinkIcon,
-  Download,
-  Frame
+  Download
 } from "lucide-react";
 
 type Project = {
