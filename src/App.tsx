@@ -89,12 +89,19 @@ type FooterContent = {
   owner: string;
 };
 
+type Education = {
+  degree: string;
+  institution: string;
+  period: string;
+};
+
 type PortfolioContent = {
   hero: HeroContent;
   branding: BrandingContent;
   links: LinksContent;
   projects: Project[];
   experience: Experience[];
+  education: Education[];
   skills: Record<string, string[]>;
   footer: FooterContent;
 };
@@ -104,7 +111,8 @@ const defaultContent: PortfolioContent = {
     greeting: "Hello, I'm",
     name: "Osama Shujaa Aldeen",
     role: "Software Engineer",
-    summary: "Software engineer crafting delightful, accessible web experiences.",
+    summary:
+      "I am a proactive and skilled Software engineer crafting delightful, accessible web experiences. with a strong foundation in web development and database management. I have experience working on dynamic and complex Laravel-based projects, integrating front-end technologies, and ensuring application security and performance. Proficient in HTML, CSS, JavaScript, PHP, Python, and ReactJS, I deliver high-quality, secure web solutions.",
     avatarUrl: "https://avatars.githubusercontent.com/u/9919?s=200&v=4",
     cvUrl: "./public/CV.pdf"
   },
@@ -126,9 +134,9 @@ const defaultContent: PortfolioContent = {
       repo: "#"
     },
     {
-      title: "E-commerce Starter",
+      title: "E-commerce wordpress site",
       description: "Cart, checkout, payments, and admin dashboard.",
-      tags: ["React", "Stripe", "Prisma"],
+      tags: ["wordPress", "WooCommerce"],
       href: "#",
       repo: "#"
     },
@@ -149,13 +157,32 @@ const defaultContent: PortfolioContent = {
       ]
     },
     {
+      role: "WordPress Developer",
+      company: "Acme Inc.",
+      period: "2023 - Present",
+      bullets: [
+        "Led migration to Vite + SWC, reducing build times by 60%.",
+        "Built design system components with accessibility baked in."
+      ]
+    },
+    {
       role: "Software Engineer",
-      company: "Globex",
-      period: "2021 - 2023",
+      company: "Realsilk Company",
+      period: "2025 - 2025",
       bullets: [
         "Shipped SSR dashboard with real-time analytics.",
-        "Mentored 3 juniors; introduced testing culture."
+        "Mentored 3 juniors; introduced testing culture.",
+        "Developed Platform using Laravel and ReactJS for seamless user experience.",
+        "Implemented secure payment gateways and optimized database queries to enhance performance.",
+        "Collaborated with cross-functional teams to deliver high-quality web solutions on time."
       ]
+    }
+  ],
+  education: [
+    {
+      degree: "Bachelor's in Computer Science",
+      institution: "Sana University",
+      period: "2019 - 2023"
     }
   ],
   skills: {
@@ -168,7 +195,9 @@ const defaultContent: PortfolioContent = {
   },
   footer: {
     owner: "Osama Shujaa Aldeen"
-  }
+  },
+  
+  
 };
 
 /** Why: explicitly typing `Transition` prevents `ease` from widening to `string`. */
@@ -274,6 +303,9 @@ function Nav(props: { branding: BrandingContent }) {
           <a href="#skills" className="opacity-80 hover:opacity-100">
             Skills
           </a>
+          <a href="#education" className="opacity-80 hover:opacity-100">
+            Education
+          </a>  
           <a href="#contact" className="opacity-80 hover:opacity-100">
             Contact
           </a>
@@ -483,6 +515,28 @@ function Experience(props: { items: Experience[] }) {
     </Container>
   );
 }
+function Education(props: { item: Education[] }) {
+  const { item } = props;
+  return (
+    <Container id="education">
+      <h2 className="mb-6 text-2xl font-semibold tracking-tight md:text-3xl">Education</h2>
+      <div className="space-y-4">
+        {item.map((e) => (
+          <Card key={e.degree}>
+            <div className="flex flex-col justify-between gap-2 md:flex-row md:items-center">
+              <div>
+                <h3 className="text-lg font-semibold">
+                  {e.degree} - <span className="text-zinc-500">{e.institution}</span>
+                </h3>
+                <p className="text-sm text-zinc-500">{e.period}</p>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </Container>
+  );
+}
 
 function Skills(props: { skills: Record<string, string[]> }) {
   const entries = Object.entries(props.skills);
@@ -625,6 +679,7 @@ export default function App() {
         <Projects projects={content.projects} />
         <Experience items={content.experience} />
         <Skills skills={content.skills} />
+        <Education item={content.education} />
         <Contact email={content.links.email} />
       </main>
       <Footer owner={content.footer.owner} />
